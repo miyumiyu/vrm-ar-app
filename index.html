@@ -3,26 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRM Head Only AR (Movement & Mask Final)</title>
+    <title>VRM Head Only AR (Final Complete)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; color: white; font-family: sans-serif; }
         #container { position: relative; width: 100vw; height: 100vh; }
         
-        /* 背景映像 */
+        /* 背景映像: CSSで cover (トリミング) 表示、かつ左右反転 */
         #videoElement { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
             object-fit: cover; 
-            transform: scaleX(-1); /* インカメラは反転表示 */
+            transform: scaleX(-1); 
             opacity: 1; 
             z-index: 0;
         }
         
-        /* Three.js Canvas */
+        /* Three.js Canvas: 手前に重ねる */
         canvas {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             z-index: 1;
-            pointer-events: none;
+            pointer-events: none; /* UI操作を通すため */
         }
         
         #ui-layer {
@@ -36,7 +36,10 @@
             transition: opacity 0.3s;
         }
         
-        #ui-layer.hidden-ui { opacity: 0; pointer-events: none; }
+        #ui-layer.hidden-ui {
+            opacity: 0;
+            pointer-events: none;
+        }
 
         #ui-toggle-btn {
             position: absolute; bottom: 20px; right: 20px; z-index: 20;
@@ -147,6 +150,11 @@
         </div>
 
         <div class="section-title">アバター調整</div>
+        <div class="mt-2 mb-2">
+             <label class="flex items-center space-x-2 text-xs text-gray-300">
+                <input type="checkbox" id="flipAvatar180"> <span>アバターを180度回転</span>
+            </label>
+        </div>
         <div class="control-group">
             <label><span>サイズ (Scale)</span> <span id="scaleVal" class="text-blue-400">2.00</span></label>
             <input type="range" id="scaleRange" min="0.5" max="10.0" step="0.01" value="2.0">
@@ -239,14 +247,13 @@ let params = {
     cutoutBottom: 1.1, 
     enableSegmentation: true, 
     
-    // 修正: デフォルトOFF。OFFの時、人物(Body)が不透明になりアバターを隠す。
     invertMask: false,         
-    
     showMaskDebug: false,
     
-    // 修正: 鏡面反転のためデフォルトON
+    // 修正: 移動・回転のデフォルト反転設定をONに変更 (鏡面動作)
     flipMoveX: true,  
-    flipRotY: true    
+    flipRotY: true,
+    flipAvatar180: false
 };
 
 const statusText = document.getElementById('statusText');
@@ -263,6 +270,7 @@ const uiLayer = document.getElementById('ui-layer');
 const uiToggleBtn = document.getElementById('ui-toggle-btn');
 const flipMoveXCheck = document.getElementById('flipMoveX');
 const flipRotYCheck = document.getElementById('flipRotY');
+const flipAvatar180Check = document.getElementById('flipAvatar180'); 
 
 const inputs = {
     scale: document.getElementById('scaleRange'),
@@ -327,6 +335,7 @@ async function init() {
     invertMaskCheck.addEventListener('change', (e) => { params.invertMask = e.target.checked; });
     flipMoveXCheck.addEventListener('change', (e) => { params.flipMoveX = e.target.checked; });
     flipRotYCheck.addEventListener('change', (e) => { params.flipRotY = e.target.checked; });
+    flipAvatar180Check.addEventListener('change', (e) => { params.flipAvatar180 = e.target.checked; });
     
     resetPosBtn.addEventListener('click', resetParams);
 
@@ -355,8 +364,9 @@ function resetParams() {
     params.cutoutBottom = 1.1;
     params.showMaskDebug = false;
     params.invertMask = false;
-    params.flipMoveX = true; // Default ON
-    params.flipRotY = true;  // Default ON
+    params.flipMoveX = true; 
+    params.flipRotY = true;
+    params.flipAvatar180 = false;
     
     Object.keys(inputs).forEach(key => {
         inputs[key].value = params[key];
@@ -367,6 +377,7 @@ function resetParams() {
     invertMaskCheck.checked = false;
     flipMoveXCheck.checked = true;
     flipRotYCheck.checked = true;
+    flipAvatar180Check.checked = false;
 
     if (avatarHolder) {
         const s = params.scale;
@@ -797,13 +808,14 @@ function updateAvatarPose(result) {
     // Mirroring Logic
     const xDir = params.flipMoveX ? -1 : 1;
     const yRotDir = params.flipRotY ? -1 : 1;
+    const avatarRot = params.flipAvatar180 ? Math.PI : 0;
 
     avatarHolder.position.x = (position.x * AR_SCALE_FACTOR * xDir) + params.offsetX; 
     avatarHolder.position.y = (position.y * AR_SCALE_FACTOR) + params.offsetY;
     avatarHolder.position.z = (position.z * AR_SCALE_FACTOR) + params.offsetZ;
     
     const euler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ');
-    avatarHolder.rotation.y = (euler.y * yRotDir) + Math.PI; 
+    avatarHolder.rotation.y = (euler.y * yRotDir) + Math.PI + avatarRot; 
     avatarHolder.rotation.x = euler.x;
     avatarHolder.rotation.z = euler.z;
     
