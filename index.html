@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRM Head Only AR (Privacy Safe Final)</title>
+    <title>VRM Head Only AR (Bug Fix Final)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; color: white; font-family: sans-serif; }
@@ -16,7 +16,6 @@
             transform: scaleX(-1); 
             opacity: 0; 
             z-index: 0;
-            /* transitionなし: 瞬時に切り替える */
         }
         
         /* Three.js Canvas */
@@ -150,7 +149,7 @@
         <div class="section-title">マスク設定</div>
         <div class="mt-2">
              <label class="flex items-center space-x-2 text-xs text-gray-300">
-                <input type="checkbox" id="invertMask"> <span>マスク領域を反転</span>
+                <input type="checkbox" id="invertMask" checked> <span>マスク領域を反転</span>
             </label>
         </div>
         
@@ -171,7 +170,7 @@
             </label>
         </div>
         <div class="control-group">
-            <label><span>サイズ</span> <span id="scaleVal" class="text-blue-400">2.00</span></label>
+            <label><span>サイズ (Scale)</span> <span id="scaleVal" class="text-blue-400">2.00</span></label>
             <input type="range" id="scaleRange" min="0.5" max="10.0" step="0.01" value="2.0">
         </div>
 
@@ -262,15 +261,11 @@ let params = {
     cutoutScale: 1.3, 
     cutoutBottom: 1.1, 
     enableSegmentation: true, 
-    
-    invertMask: false, 
+    invertMask: true, 
     showMaskDebug: false,
-    
     flipMoveX: false,  
     flipRotY: true,
     flipAvatar180: false,
-    
-    // プライバシー保護: 顔未検出時は画面を黒くする
     blackoutMode: true 
 };
 
@@ -384,7 +379,7 @@ function resetParams() {
     params.cutoutScale = 1.3;
     params.cutoutBottom = 1.1;
     params.showMaskDebug = false;
-    params.invertMask = false;
+    params.invertMask = true;
     params.flipMoveX = false; 
     params.flipRotY = true;
     params.flipAvatar180 = false;
@@ -396,7 +391,7 @@ function resetParams() {
         displays[key].innerText = params[key].toFixed(precision);
     });
     showMaskDebugCheck.checked = false;
-    invertMaskCheck.checked = false;
+    invertMaskCheck.checked = true;
     flipMoveXCheck.checked = false;
     flipRotYCheck.checked = true;
     flipAvatar180Check.checked = false;
@@ -572,61 +567,60 @@ async function startCameraAndTracking() {
         videoTexture.colorSpace = THREE.SRGBColorSpace;
         scene.background = null; 
 
-        // Layer 3: Body Occlusion
         if (params.enableSegmentation && imageSegmenter) {
-            if (!occlusionPlane) {
-                maskCanvas = document.createElement('canvas');
-                maskCanvas.width = videoElement.videoWidth;
-                maskCanvas.height = videoElement.videoHeight;
-                maskCtx = maskCanvas.getContext('2d');
+            maskCanvas = document.createElement('canvas');
+            maskCanvas.width = videoElement.videoWidth;
+            maskCanvas.height = videoElement.videoHeight;
+            maskCtx = maskCanvas.getContext('2d');
 
-                segmentationMaskTexture = new THREE.CanvasTexture(maskCanvas);
-                segmentationMaskTexture.minFilter = THREE.LinearFilter;
-                
-                occlusionMaterial = new THREE.ShaderMaterial({
-                    uniforms: {
-                        uVideo: { value: videoTexture },
-                        uMask: { value: segmentationMaskTexture },
-                        uDebug: { value: params.showMaskDebug }
-                    },
-                    vertexShader: `
-                        varying vec2 vUv;
-                        void main() {
-                            vUv = uv;
-                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                        }
-                    `,
-                    fragmentShader: `
-                        uniform sampler2D uVideo;
-                        uniform sampler2D uMask;
-                        uniform bool uDebug;
-                        varying vec2 vUv;
-                        void main() {
-                            vec4 videoColor = texture2D(uVideo, vUv);
-                            float maskAlpha = texture2D(uMask, vUv).a;
-                            if (uDebug) {
-                                gl_FragColor = vec4(1.0, 0.0, 0.0, maskAlpha * 0.6);
+            segmentationMaskTexture = new THREE.CanvasTexture(maskCanvas);
+            segmentationMaskTexture.minFilter = THREE.LinearFilter;
+            
+            occlusionMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    uVideo: { value: videoTexture },
+                    uMask: { value: segmentationMaskTexture },
+                    uDebug: { value: params.showMaskDebug }
+                },
+                vertexShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform sampler2D uVideo;
+                    uniform sampler2D uMask;
+                    uniform bool uDebug;
+                    varying vec2 vUv;
+                    void main() {
+                        vec4 videoColor = texture2D(uVideo, vUv);
+                        float maskAlpha = texture2D(uMask, vUv).a;
+                        if (uDebug) {
+                            gl_FragColor = vec4(1.0, 0.0, 0.0, maskAlpha * 0.6);
+                        } else {
+                            if (maskAlpha > 0.5) {
+                                gl_FragColor = vec4(videoColor.rgb, 1.0);
                             } else {
-                                if (maskAlpha > 0.5) {
-                                    gl_FragColor = vec4(videoColor.rgb, 1.0);
-                                } else {
-                                    discard;
-                                }
+                                discard;
                             }
                         }
-                    `,
-                    transparent: true,
-                    side: THREE.DoubleSide,
-                    depthWrite: true 
-                });
-                
-                occlusionPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), occlusionMaterial);
-                occlusionPlane.renderOrder = 999; 
-                occlusionPlane.position.set(0, 0, 0.5); 
-                occlusionPlane.visible = false; 
-                
-                scene.add(occlusionPlane);
-            }
+                    }
+                `,
+                transparent: true,
+                side: THREE.DoubleSide,
+                depthWrite: true 
+            });
+            
+            const planeGeometry = new THREE.PlaneGeometry(1, 1); 
+            occlusionPlane = new THREE.Mesh(planeGeometry, occlusionMaterial);
+            
+            occlusionPlane.renderOrder = 999; 
+            occlusionPlane.position.set(0, 0, 0.5); 
+            occlusionPlane.visible = false; 
+            
+            scene.add(occlusionPlane);
             updateOcclusionPlaneTransform();
         }
 
@@ -688,25 +682,17 @@ function animate() {
                 const faceResult = faceLandmarker.detectForVideo(videoElement, startTimeMs);
                 let faceLandmarks = null;
                 
-                // --- FACE DETECTED ---
                 if (faceResult.faceLandmarks && faceResult.faceLandmarks.length > 0) {
                     faceLandmarks = faceResult.faceLandmarks[0]; 
                     updateAvatarPose(faceResult);
                     
-                    // Show Avatar & Occlusion
                     if (currentVrm) currentVrm.scene.visible = true;
                     if (occlusionPlane) occlusionPlane.visible = true; 
-
-                    // Show Video
                     videoElement.style.opacity = 1;
                     privacyMessage.style.opacity = 0;
-
                     statusText.innerText = "トラッキング中";
-                } 
-                // --- FACE LOST ---
-                else {
+                } else {
                     statusText.innerText = "顔を探しています...";
-                    
                     if (params.blackoutMode) {
                         if (currentVrm) currentVrm.scene.visible = false;
                         if (occlusionPlane) occlusionPlane.visible = false;
