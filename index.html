@@ -3,26 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRM Head Only AR (Final Complete)</title>
+    <title>VRM Head Only AR (Privacy Safe Final)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; color: white; font-family: sans-serif; }
-        #container { position: relative; width: 100vw; height: 100vh; }
+        #container { position: relative; width: 100vw; height: 100vh; background-color: black; }
         
-        /* 背景映像: CSSで cover (トリミング) 表示、かつ左右反転 */
+        /* 背景映像: 初期状態は非表示 */
         #videoElement { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
             object-fit: cover; 
             transform: scaleX(-1); 
-            opacity: 1; 
+            opacity: 0; 
             z-index: 0;
+            /* transitionなし: 瞬時に切り替える */
         }
         
-        /* Three.js Canvas: 手前に重ねる */
+        /* Three.js Canvas */
         canvas {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             z-index: 1;
-            pointer-events: none; /* UI操作を通すため */
+            pointer-events: none;
         }
         
         #ui-layer {
@@ -36,10 +37,7 @@
             transition: opacity 0.3s;
         }
         
-        #ui-layer.hidden-ui {
-            opacity: 0;
-            pointer-events: none;
-        }
+        #ui-layer.hidden-ui { opacity: 0; pointer-events: none; }
 
         #ui-toggle-btn {
             position: absolute; bottom: 20px; right: 20px; z-index: 20;
@@ -90,6 +88,14 @@
             color: rgba(255,255,255,0.5); font-size: 10px; pointer-events: none;
             z-index: 5;
         }
+
+        #privacy-message {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #ef4444; font-weight: bold; font-size: 18px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            pointer-events: none; opacity: 0;
+            z-index: 5; text-align: center;
+        }
     </style>
 
     <!-- Import Maps -->
@@ -108,6 +114,8 @@
 
 <div id="container">
     <video id="videoElement" playsinline></video>
+    <div id="privacy-message">NO FACE DETECTED<br>VIDEO HIDDEN</div>
+    
     <div id="ui-toggle-btn" title="UI表示/非表示">👁️</div>
 
     <div id="ui-layer">
@@ -132,6 +140,13 @@
             <div id="debugInfo" class="debug-info mt-1 ml-1">Mask: Waiting...</div>
         </div>
 
+        <div class="section-title">セキュリティ設定</div>
+        <div class="mt-2">
+             <label class="flex items-center space-x-2 text-xs text-green-400 font-bold">
+                <input type="checkbox" id="blackoutMode" checked> <span>顔未検出時は画面を黒くする</span>
+            </label>
+        </div>
+
         <div class="section-title">マスク設定</div>
         <div class="mt-2">
              <label class="flex items-center space-x-2 text-xs text-gray-300">
@@ -142,7 +157,7 @@
         <div class="section-title">動きの反転 (Mirror)</div>
         <div class="flex space-x-4 mb-2">
             <label class="flex items-center space-x-2 text-xs text-gray-300">
-                <input type="checkbox" id="flipMoveX" checked> <span>移動 (X)</span>
+                <input type="checkbox" id="flipMoveX"> <span>移動 (X)</span>
             </label>
             <label class="flex items-center space-x-2 text-xs text-gray-300">
                 <input type="checkbox" id="flipRotY" checked> <span>回転 (Y)</span>
@@ -156,7 +171,7 @@
             </label>
         </div>
         <div class="control-group">
-            <label><span>サイズ (Scale)</span> <span id="scaleVal" class="text-blue-400">2.00</span></label>
+            <label><span>サイズ</span> <span id="scaleVal" class="text-blue-400">2.00</span></label>
             <input type="range" id="scaleRange" min="0.5" max="10.0" step="0.01" value="2.0">
         </div>
 
@@ -221,6 +236,7 @@ let avatarHolder = null;
 let faceLandmarker = null;
 let imageSegmenter = null; 
 let videoElement = document.getElementById('videoElement');
+let privacyMessage = document.getElementById('privacy-message');
 let lastVideoTime = -1;
 let isTracking = false;
 let currentStream = null;
@@ -247,13 +263,15 @@ let params = {
     cutoutBottom: 1.1, 
     enableSegmentation: true, 
     
-    invertMask: false,         
+    invertMask: false, 
     showMaskDebug: false,
     
-    // 修正: 移動・回転のデフォルト反転設定をONに変更 (鏡面動作)
-    flipMoveX: true,  
+    flipMoveX: false,  
     flipRotY: true,
-    flipAvatar180: false
+    flipAvatar180: false,
+    
+    // プライバシー保護: 顔未検出時は画面を黒くする
+    blackoutMode: true 
 };
 
 const statusText = document.getElementById('statusText');
@@ -271,6 +289,7 @@ const uiToggleBtn = document.getElementById('ui-toggle-btn');
 const flipMoveXCheck = document.getElementById('flipMoveX');
 const flipRotYCheck = document.getElementById('flipRotY');
 const flipAvatar180Check = document.getElementById('flipAvatar180'); 
+const blackoutModeCheck = document.getElementById('blackoutMode');
 
 const inputs = {
     scale: document.getElementById('scaleRange'),
@@ -306,6 +325,7 @@ async function init() {
     container.appendChild(renderer.domElement);
 
     avatarHolder = new THREE.Group();
+    avatarHolder.renderOrder = 10; 
     scene.add(avatarHolder);
 
     const light = new THREE.DirectionalLight(0xffffff, 1.0);
@@ -336,6 +356,7 @@ async function init() {
     flipMoveXCheck.addEventListener('change', (e) => { params.flipMoveX = e.target.checked; });
     flipRotYCheck.addEventListener('change', (e) => { params.flipRotY = e.target.checked; });
     flipAvatar180Check.addEventListener('change', (e) => { params.flipAvatar180 = e.target.checked; });
+    blackoutModeCheck.addEventListener('change', (e) => { params.blackoutMode = e.target.checked; });
     
     resetPosBtn.addEventListener('click', resetParams);
 
@@ -364,9 +385,10 @@ function resetParams() {
     params.cutoutBottom = 1.1;
     params.showMaskDebug = false;
     params.invertMask = false;
-    params.flipMoveX = true; 
+    params.flipMoveX = false; 
     params.flipRotY = true;
     params.flipAvatar180 = false;
+    params.blackoutMode = true;
     
     Object.keys(inputs).forEach(key => {
         inputs[key].value = params[key];
@@ -375,9 +397,10 @@ function resetParams() {
     });
     showMaskDebugCheck.checked = false;
     invertMaskCheck.checked = false;
-    flipMoveXCheck.checked = true;
+    flipMoveXCheck.checked = false;
     flipRotYCheck.checked = true;
     flipAvatar180Check.checked = false;
+    blackoutModeCheck.checked = true;
 
     if (avatarHolder) {
         const s = params.scale;
@@ -549,60 +572,61 @@ async function startCameraAndTracking() {
         videoTexture.colorSpace = THREE.SRGBColorSpace;
         scene.background = null; 
 
+        // Layer 3: Body Occlusion
         if (params.enableSegmentation && imageSegmenter) {
-            maskCanvas = document.createElement('canvas');
-            maskCanvas.width = videoElement.videoWidth;
-            maskCanvas.height = videoElement.videoHeight;
-            maskCtx = maskCanvas.getContext('2d');
+            if (!occlusionPlane) {
+                maskCanvas = document.createElement('canvas');
+                maskCanvas.width = videoElement.videoWidth;
+                maskCanvas.height = videoElement.videoHeight;
+                maskCtx = maskCanvas.getContext('2d');
 
-            segmentationMaskTexture = new THREE.CanvasTexture(maskCanvas);
-            segmentationMaskTexture.minFilter = THREE.LinearFilter;
-            
-            occlusionMaterial = new THREE.ShaderMaterial({
-                uniforms: {
-                    uVideo: { value: videoTexture },
-                    uMask: { value: segmentationMaskTexture },
-                    uDebug: { value: params.showMaskDebug }
-                },
-                vertexShader: `
-                    varying vec2 vUv;
-                    void main() {
-                        vUv = uv;
-                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                    }
-                `,
-                fragmentShader: `
-                    uniform sampler2D uVideo;
-                    uniform sampler2D uMask;
-                    uniform bool uDebug;
-                    varying vec2 vUv;
-                    void main() {
-                        vec4 videoColor = texture2D(uVideo, vUv);
-                        float maskAlpha = texture2D(uMask, vUv).a;
-                        if (uDebug) {
-                            gl_FragColor = vec4(1.0, 0.0, 0.0, maskAlpha * 0.6);
-                        } else {
-                            if (maskAlpha > 0.5) {
-                                gl_FragColor = vec4(videoColor.rgb, 1.0);
+                segmentationMaskTexture = new THREE.CanvasTexture(maskCanvas);
+                segmentationMaskTexture.minFilter = THREE.LinearFilter;
+                
+                occlusionMaterial = new THREE.ShaderMaterial({
+                    uniforms: {
+                        uVideo: { value: videoTexture },
+                        uMask: { value: segmentationMaskTexture },
+                        uDebug: { value: params.showMaskDebug }
+                    },
+                    vertexShader: `
+                        varying vec2 vUv;
+                        void main() {
+                            vUv = uv;
+                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                        }
+                    `,
+                    fragmentShader: `
+                        uniform sampler2D uVideo;
+                        uniform sampler2D uMask;
+                        uniform bool uDebug;
+                        varying vec2 vUv;
+                        void main() {
+                            vec4 videoColor = texture2D(uVideo, vUv);
+                            float maskAlpha = texture2D(uMask, vUv).a;
+                            if (uDebug) {
+                                gl_FragColor = vec4(1.0, 0.0, 0.0, maskAlpha * 0.6);
                             } else {
-                                discard;
+                                if (maskAlpha > 0.5) {
+                                    gl_FragColor = vec4(videoColor.rgb, 1.0);
+                                } else {
+                                    discard;
+                                }
                             }
                         }
-                    }
-                `,
-                transparent: true,
-                side: THREE.DoubleSide,
-                depthWrite: true 
-            });
-            
-            const planeGeometry = new THREE.PlaneGeometry(1, 1); 
-            occlusionPlane = new THREE.Mesh(planeGeometry, occlusionMaterial);
-            
-            occlusionPlane.renderOrder = 999; 
-            occlusionPlane.position.set(0, 0, 0.5); 
-            occlusionPlane.visible = false; 
-            
-            scene.add(occlusionPlane);
+                    `,
+                    transparent: true,
+                    side: THREE.DoubleSide,
+                    depthWrite: true 
+                });
+                
+                occlusionPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), occlusionMaterial);
+                occlusionPlane.renderOrder = 999; 
+                occlusionPlane.position.set(0, 0, 0.5); 
+                occlusionPlane.visible = false; 
+                
+                scene.add(occlusionPlane);
+            }
             updateOcclusionPlaneTransform();
         }
 
@@ -663,12 +687,32 @@ function animate() {
             try {
                 const faceResult = faceLandmarker.detectForVideo(videoElement, startTimeMs);
                 let faceLandmarks = null;
+                
+                // --- FACE DETECTED ---
                 if (faceResult.faceLandmarks && faceResult.faceLandmarks.length > 0) {
                     faceLandmarks = faceResult.faceLandmarks[0]; 
                     updateAvatarPose(faceResult);
+                    
+                    // Show Avatar & Occlusion
+                    if (currentVrm) currentVrm.scene.visible = true;
+                    if (occlusionPlane) occlusionPlane.visible = true; 
+
+                    // Show Video
+                    videoElement.style.opacity = 1;
+                    privacyMessage.style.opacity = 0;
+
                     statusText.innerText = "トラッキング中";
-                } else {
+                } 
+                // --- FACE LOST ---
+                else {
                     statusText.innerText = "顔を探しています...";
+                    
+                    if (params.blackoutMode) {
+                        if (currentVrm) currentVrm.scene.visible = false;
+                        if (occlusionPlane) occlusionPlane.visible = false;
+                        videoElement.style.opacity = 0;
+                        privacyMessage.style.opacity = 1;
+                    }
                 }
 
                 if (imageSegmenter && occlusionPlane && occlusionMaterial && params.enableSegmentation) {
@@ -678,7 +722,6 @@ function animate() {
                             if (segResult.categoryMask) {
                                 updateOcclusionMask(segResult.categoryMask, faceLandmarks);
                                 maskUpdateCount++;
-                                occlusionPlane.visible = true;
                             }
                         } finally {
                             if (segResult.categoryMask) segResult.categoryMask.close();
@@ -689,6 +732,12 @@ function animate() {
                     }
                     occlusionMaterial.needsUpdate = true;
                     if(segmentationMaskTexture) segmentationMaskTexture.needsUpdate = true;
+                    
+                    if (params.showMaskDebug) {
+                        occlusionMaterial.uniforms.uDebug.value = true;
+                    } else {
+                        occlusionMaterial.uniforms.uDebug.value = false;
+                    }
                 } else {
                     if (occlusionPlane) occlusionPlane.visible = false;
                 }
@@ -706,13 +755,13 @@ function animate() {
 }
 
 function updateOcclusionMask(mask, faceLandmarks) {
-    if (maskCanvas.width !== mask.width || maskCanvas.height !== mask.height) {
-        maskCanvas.width = mask.width;
-        maskCanvas.height = mask.height;
+    if (maskCanvas.width !== videoElement.videoWidth) {
+        maskCanvas.width = videoElement.videoWidth;
+        maskCanvas.height = videoElement.videoHeight;
     }
 
-    const width = mask.width;
-    const height = mask.height;
+    const width = maskCanvas.width;
+    const height = maskCanvas.height;
     const maskArray = mask.getAsUint8Array(); 
     const imgData = maskCtx.createImageData(width, height);
     const invert = params.invertMask;
@@ -729,8 +778,8 @@ function updateOcclusionMask(mask, faceLandmarks) {
         alpha = shouldMask ? 255 : 0;
         
         imgData.data[pixelIndex] = 255;     
-        imgData.data[pixelIndex + 1] = 0;   
-        imgData.data[pixelIndex + 2] = 0;   
+        imgData.data[pixelIndex + 1] = 255;   
+        imgData.data[pixelIndex + 2] = 255;   
         imgData.data[pixelIndex + 3] = alpha; 
     }
 
@@ -805,8 +854,7 @@ function updateAvatarPose(result) {
     mpMatrix.decompose(position, quaternion, scale);
     const AR_SCALE_FACTOR = 0.08; 
     
-    // Mirroring Logic
-    const xDir = params.flipMoveX ? -1 : 1;
+    const xDir = params.flipMoveX ? 1 : -1;
     const yRotDir = params.flipRotY ? -1 : 1;
     const avatarRot = params.flipAvatar180 ? Math.PI : 0;
 
