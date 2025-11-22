@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRM Head Only AR (Image Upload)</title>
+    <title>VRM Head Only AR (Narrow Mask)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; color: white; font-family: sans-serif; }
@@ -21,12 +21,13 @@
         /* Layer 0.5: 待機画像 (顔ロスト時に表示) */
         #standbyImageLayer {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            object-fit: cover; /* 画面いっぱいに表示 */
-            opacity: 0; /* 初期非表示 */
+            object-fit: cover;
+            opacity: 0;
             z-index: 1;
             pointer-events: none;
-            background-color: black; /* 画像がないときは黒 */
+            background-color: black;
             display: flex; align-items: center; justify-content: center;
+            transition: opacity 0.5s;
         }
         #standbyImage {
             width: 100%; height: 100%; object-fit: cover; display: none;
@@ -43,7 +44,7 @@
             position: absolute; top: 10px; left: 10px; z-index: 10;
             background: rgba(0, 0, 0, 0.8); padding: 16px; border-radius: 12px;
             max-width: 340px;
-            max-height: 95vh;
+            max-height: 90vh;
             overflow-y: auto;
             box-shadow: 0 4px 6px rgba(0,0,0,0.3);
             backdrop-filter: blur(5px);
@@ -63,6 +64,7 @@
             pointer-events: auto;
         }
 
+        /* スクロールバー装飾 */
         #ui-layer::-webkit-scrollbar { width: 6px; }
         #ui-layer::-webkit-scrollbar-track { background: transparent; }
         #ui-layer::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
@@ -103,11 +105,10 @@
         }
 
         #privacy-message {
-            /* 画像がない時だけ表示されるテキスト */
             color: #ef4444; font-weight: bold; font-size: 18px;
             text-shadow: 0 2px 4px rgba(0,0,0,0.8);
             text-align: center;
-            display: none; /* JSで制御 */
+            display: none;
         }
     </style>
 
@@ -138,7 +139,7 @@
     <div id="ui-toggle-btn" title="UI表示/非表示">👁️</div>
 
     <div id="ui-layer">
-        <h1 class="text-xl font-bold mb-4 text-white tracking-tight">Head Avatar AR</h1>
+        <h1 class="text-xl font-bold mb-4 text-white tracking-tight">Head Avatar AR <span class="text-xs text-blue-400 font-normal">v2.2</span></h1>
         
         <input type="file" id="vrmInput" accept=".vrm" style="display: none;">
         <button id="loadBtn" class="btn">1. VRMを選択</button>
@@ -165,7 +166,6 @@
                 <input type="checkbox" id="blackoutMode" checked> <span>顔未検出時は画面を隠す</span>
             </label>
             
-            <!-- 画像アップロードボタン -->
             <input type="file" id="imageInput" accept="image/*" style="display: none;">
             <button id="uploadImgBtn" class="btn btn-secondary text-xs py-2">待機画像をアップロード (任意)</button>
             <div id="imgStatus" class="text-[10px] text-gray-400 text-right">画像なし (黒画面)</div>
@@ -178,7 +178,7 @@
             </label>
         </div>
         
-        <div class="section-title">動きの反転 (Mirror)</div>
+        <div class="section-title">動きの設定</div>
         <div class="flex space-x-4 mb-2">
             <label class="flex items-center space-x-2 text-xs text-gray-300">
                 <input type="checkbox" id="flipMoveX"> <span>移動 (X)</span>
@@ -186,6 +186,10 @@
             <label class="flex items-center space-x-2 text-xs text-gray-300">
                 <input type="checkbox" id="flipRotY" checked> <span>回転 (Y)</span>
             </label>
+        </div>
+        <div class="control-group">
+            <label><span>滑らかさ (Smoothing)</span> <span id="smoothVal" class="text-green-400">0.50</span></label>
+            <input type="range" id="smoothRange" min="0.1" max="0.95" step="0.05" value="0.5">
         </div>
 
         <div class="section-title">アバター調整</div>
@@ -214,15 +218,24 @@
             <input type="range" id="offsetZRange" min="-1.0" max="1.0" step="0.001" value="-0.01">
         </div>
 
-        <div class="section-title">マスク穴調整</div>
+        <div class="section-title">マスク穴 (くり抜き) 調整</div>
+        <div class="text-[10px] text-gray-400 mb-2">
+            アバターが見える範囲を調整します
+        </div>
 
+        <!-- 顔の広さのデフォルト値を1.5から1.3に変更 -->
         <div class="control-group">
-            <label><span>顔の穴の幅 (Width)</span> <span id="cutoutScaleVal" class="text-yellow-400">1.30</span></label>
-            <input type="range" id="cutoutScaleRange" min="1.0" max="2.5" step="0.01" value="1.3">
+            <label><span>顔の広さ (Face Width)</span> <span id="cutoutScaleVal" class="text-yellow-400">1.30</span></label>
+            <input type="range" id="cutoutScaleRange" min="1.0" max="3.0" step="0.05" value="1.3">
         </div>
         <div class="control-group">
-            <label><span>顔の穴の下限 (Chin)</span> <span id="cutoutBottomVal" class="text-yellow-400">1.10</span></label>
-            <input type="range" id="cutoutBottomRange" min="0.8" max="2.0" step="0.01" value="1.1">
+            <label><span>アゴ下の広さ (Chin)</span> <span id="cutoutBottomVal" class="text-yellow-400">1.00</span></label>
+            <input type="range" id="cutoutBottomRange" min="0.5" max="2.0" step="0.05" value="1.0">
+        </div>
+        <div class="control-group">
+            <label><span>おでこ上の広さ (Forehead)</span> <span id="cutoutTopVal" class="text-yellow-400">2.00</span></label>
+            <input type="range" id="cutoutTopRange" min="1.0" max="5.0" step="0.1" value="2.0">
+            <div class="text-[10px] text-gray-500 text-right">値を上げると髪が切れにくくなります</div>
         </div>
 
         <div class="flex justify-end mt-4">
@@ -254,6 +267,7 @@ console.error = function(...args) {
     originalError.apply(console, args);
 };
 
+// --- グローバル変数 ---
 let scene, camera, renderer, clock;
 let currentVrm = null;
 let avatarHolder = null; 
@@ -277,27 +291,38 @@ let maskCtx = null;
 let maskUpdateCount = 0; 
 let hasCustomImage = false;
 
-const FACE_OVAL_INDICES = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109];
-const LEFT_EAR_INDEX = 234; 
-const RIGHT_EAR_INDEX = 454; 
+// 修正: 顔の輪郭点から、横側の点(耳に近い部分)を削除して狭くした
+// 削除した点: 右側[454, 323, 361], 左側[132, 93, 234]
+const FACE_OVAL_INDICES = [10, 338, 297, 332, 284, 251, 389, 356, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 127, 162, 21, 54, 103, 67, 109];
 
+// --- パラメータとUI要素 ---
 let params = {
     scale: 2.0, 
     offsetX: 0.0,
     offsetY: 0.0, 
     offsetZ: -0.01,
-    cutoutScale: 1.3, 
-    cutoutBottom: 1.1, 
-    enableSegmentation: true, 
     
+    // マスク調整パラメータ
+    cutoutScale: 1.3,  // 顔の広さのデフォルト値を1.3に変更
+    cutoutBottom: 1.0, 
+    cutoutTop: 2.0,    
+    
+    enableSegmentation: true, 
     invertMask: true, 
     showMaskDebug: false,
     
     flipMoveX: false,  
     flipRotY: true,
     flipAvatar180: false,
-    blackoutMode: true 
+    blackoutMode: true,
+    
+    smoothFactor: 0.5
 };
+
+// --- スムージング用のターゲット変数 ---
+let targetPosition = new THREE.Vector3(0,0,0);
+let targetQuaternion = new THREE.Quaternion();
+let targetExpressions = {}; 
 
 const statusText = document.getElementById('statusText');
 const debugInfo = document.getElementById('debugInfo');
@@ -326,6 +351,8 @@ const inputs = {
     offsetZ: document.getElementById('offsetZRange'),
     cutoutScale: document.getElementById('cutoutScaleRange'),
     cutoutBottom: document.getElementById('cutoutBottomRange'),
+    cutoutTop: document.getElementById('cutoutTopRange'),
+    smoothFactor: document.getElementById('smoothRange'),
 };
 const displays = {
     scale: document.getElementById('scaleVal'),
@@ -334,6 +361,8 @@ const displays = {
     offsetZ: document.getElementById('offsetZVal'),
     cutoutScale: document.getElementById('cutoutScaleVal'),
     cutoutBottom: document.getElementById('cutoutBottomVal'),
+    cutoutTop: document.getElementById('cutoutTopVal'),
+    smoothFactor: document.getElementById('smoothVal'),
 };
 
 async function init() {
@@ -396,7 +425,7 @@ async function init() {
         inputs[key].addEventListener('input', (e) => {
             params[key] = parseFloat(e.target.value);
             const precision = (key.includes('offset')) ? 3 : 2;
-            displays[key].innerText = params[key].toFixed(precision);
+            if(displays[key]) displays[key].innerText = params[key].toFixed(precision);
             
             if (key === 'scale' && avatarHolder) {
                 const s = params.scale;
@@ -413,19 +442,23 @@ function resetParams() {
     params.offsetX = 0.0;
     params.offsetY = 0.0;
     params.offsetZ = -0.01;
-    params.cutoutScale = 1.3;
-    params.cutoutBottom = 1.1;
+    
+    params.cutoutScale = 1.3; // リセット時も1.3に戻す
+    params.cutoutBottom = 1.0;
+    params.cutoutTop = 2.0;
+    
     params.showMaskDebug = false;
     params.invertMask = true;
     params.flipMoveX = false; 
     params.flipRotY = true;
     params.flipAvatar180 = false;
     params.blackoutMode = true;
+    params.smoothFactor = 0.5;
     
     Object.keys(inputs).forEach(key => {
-        inputs[key].value = params[key];
+        if(inputs[key]) inputs[key].value = params[key];
         const precision = (key.includes('offset')) ? 3 : 2;
-        displays[key].innerText = params[key].toFixed(precision);
+        if(displays[key]) displays[key].innerText = params[key].toFixed(precision);
     });
     showMaskDebugCheck.checked = false;
     invertMaskCheck.checked = true;
@@ -450,7 +483,7 @@ function loadImage(event) {
     reader.onload = function(e) {
         standbyImg.src = e.target.result;
         standbyImg.style.display = 'block';
-        privacyMessage.style.display = 'none'; // 画像があるならテキストは消す
+        privacyMessage.style.display = 'none';
         hasCustomImage = true;
         imgStatus.innerText = "画像あり";
         imgStatus.style.color = "#4ade80";
@@ -680,7 +713,7 @@ async function startCameraAndTracking() {
 
         isTracking = true;
         startBtn.innerText = "動作中";
-        statusText.innerText = "トラッキング中...";
+        statusText.innerText = "トラッキング中";
         
         animate();
         
@@ -736,34 +769,24 @@ function animate() {
                 const faceResult = faceLandmarker.detectForVideo(videoElement, startTimeMs);
                 let faceLandmarks = null;
                 
-                // --- FACE DETECTED ---
                 if (faceResult.faceLandmarks && faceResult.faceLandmarks.length > 0) {
                     faceLandmarks = faceResult.faceLandmarks[0]; 
-                    updateAvatarPose(faceResult);
+                    updateAvatarTargetPose(faceResult);
                     
-                    // Show Avatar & Occlusion
                     if (currentVrm) currentVrm.scene.visible = true;
                     if (occlusionPlane) occlusionPlane.visible = true; 
 
-                    // Show Video Layer
                     videoElement.style.opacity = 1;
-                    // Hide Standby/Blackout Layer
                     standbyLayer.style.opacity = 0;
 
                     statusText.innerText = "トラッキング中";
                 } 
-                // --- FACE LOST ---
                 else {
                     statusText.innerText = "顔を探しています...";
-                    
                     if (params.blackoutMode) {
-                        // Hide Avatar
                         if (currentVrm) currentVrm.scene.visible = false;
                         if (occlusionPlane) occlusionPlane.visible = false;
-                        
-                        // Hide Camera Video
                         videoElement.style.opacity = 0;
-                        // Show Standby/Blackout Layer
                         standbyLayer.style.opacity = 1;
                     }
                 }
@@ -786,13 +809,7 @@ function animate() {
                     occlusionMaterial.needsUpdate = true;
                     if(segmentationMaskTexture) segmentationMaskTexture.needsUpdate = true;
                     
-                    if (params.showMaskDebug) {
-                        occlusionMaterial.uniforms.uDebug.value = true;
-                    } else {
-                        occlusionMaterial.uniforms.uDebug.value = false;
-                    }
-                } else {
-                    if (occlusionPlane) occlusionPlane.visible = false;
+                    occlusionMaterial.uniforms.uDebug.value = params.showMaskDebug;
                 }
             } catch (e) {
                console.warn(e);
@@ -800,13 +817,26 @@ function animate() {
         }
     }
     
-    if (currentVrm) {
+    if (currentVrm && avatarHolder) {
+        const t = Math.min(Math.max(params.smoothFactor, 0.01), 1.0);
+        avatarHolder.position.lerp(targetPosition, t);
+        avatarHolder.quaternion.slerp(targetQuaternion, t);
+        
+        if (currentVrm.expressionManager) {
+            Object.keys(targetExpressions).forEach(name => {
+                const targetVal = targetExpressions[name];
+                const currentVal = currentVrm.expressionManager.getValue(name);
+                const nextVal = currentVal + (targetVal - currentVal) * t;
+                currentVrm.expressionManager.setValue(name, nextVal);
+            });
+        }
         currentVrm.update(deltaTime);
     }
     
     renderer.render(scene, camera);
 }
 
+// 修正: 顔の輪郭に沿って穴をあける
 function updateOcclusionMask(mask, faceLandmarks) {
     if (maskCanvas.width !== videoElement.videoWidth) {
         maskCanvas.width = videoElement.videoWidth;
@@ -819,6 +849,7 @@ function updateOcclusionMask(mask, faceLandmarks) {
     const imgData = maskCtx.createImageData(width, height);
     const invert = params.invertMask;
     
+    // 体全体のマスクを描画 (ここまでは同じ)
     for (let i = 0; i < width * height; ++i) {
         const category = maskArray[i];
         const pixelIndex = i * 4;
@@ -838,52 +869,63 @@ function updateOcclusionMask(mask, faceLandmarks) {
 
     maskCtx.putImageData(imgData, 0, 0);
     
+    // 顔の部分だけ穴をあける (ここを修正)
     if (faceLandmarks) {
         maskCtx.globalCompositeOperation = 'destination-out'; 
         maskCtx.fillStyle = 'rgba(0,0,0,1)'; 
         
-        let minX = 1.0, minY = 1.0, maxX = 0.0, maxY = 0.0;
-        for (let i = 0; i < FACE_OVAL_INDICES.length; i++) {
-            const idx = FACE_OVAL_INDICES[i];
-            const p = faceLandmarks[idx];
-            if (p.x < minX) minX = p.x;
-            if (p.x > maxX) maxX = p.x;
-            if (p.y < minY) minY = p.y;
-            if (p.y > maxY) maxY = p.y;
+        // 1. 重心を計算
+        let cx = 0, cy = 0;
+        const pts = [];
+        for(let i=0; i<FACE_OVAL_INDICES.length; i++) {
+            const p = faceLandmarks[FACE_OVAL_INDICES[i]];
+            // 座標をCanvasサイズに変換
+            const x = p.x * width;
+            const y = p.y * height;
+            pts.push({x, y});
+            cx += x;
+            cy += y;
         }
-
-        const boxX = minX * width;
-        const boxY = minY * height;
-        const boxW = (maxX - minX) * width;
-        const boxH = (maxY - minY) * height;
-        const centerX = boxX + boxW / 2;
-        const centerY = boxY + boxH / 2;
-
-        const leftEar = faceLandmarks[LEFT_EAR_INDEX];
-        const rightEar = faceLandmarks[RIGHT_EAR_INDEX];
-        const dx = (rightEar.x - leftEar.x); 
-        const dy = (rightEar.y - leftEar.y);
-        const rotation = Math.atan2(dy, dx); 
-
-        const scaleW = params.cutoutScale; 
-        const scaleH = params.cutoutBottom; 
-        const radiusX = (boxW / 2) * scaleW; 
-        const radiusY = (boxH / 2) * scaleH; 
-
-        maskCtx.save();
-        maskCtx.translate(centerX, centerY);
-        maskCtx.rotate(rotation); 
+        cx /= pts.length;
+        cy /= pts.length;
         
+        // 2. パスを作成 (中心から拡大して描画)
         maskCtx.beginPath();
-        maskCtx.scale(radiusX, radiusY);
-        maskCtx.arc(0, 0, 1, 0, Math.PI); 
-        maskCtx.fill();
         
-        maskCtx.beginPath();
-        maskCtx.rect(-1.5, -10, 3, 10); 
+        for(let i=0; i<pts.length; i++) {
+            let px = pts[i].x;
+            let py = pts[i].y;
+            
+            // 重心からのベクトル
+            let vx = px - cx;
+            let vy = py - cy;
+            
+            // 拡張係数の決定
+            // 通常のスケール
+            let scale = params.cutoutScale;
+            
+            // インデックスが0付近(おでこ)か18付近(アゴ)かでスケールを変える
+            // FACE_OVAL_INDICES[0]は額(10), FACE_OVAL_INDICES[18]はアゴ(152)
+            
+            // 簡易的にY座標で判定：重心より上ならTopScale、下ならBottomScaleをブレンド
+            if (vy < 0) {
+                // 上（おでこ側）
+                scale *= params.cutoutTop; // 髪の毛対策で大きく広げる
+            } else {
+                // 下（アゴ側）
+                scale *= params.cutoutBottom;
+            }
+
+            const nx = cx + vx * scale;
+            const ny = cy + vy * scale;
+            
+            if(i===0) maskCtx.moveTo(nx, ny);
+            else maskCtx.lineTo(nx, ny);
+        }
+        
+        maskCtx.closePath();
         maskCtx.fill();
 
-        maskCtx.restore();
         maskCtx.globalCompositeOperation = 'source-over';
     }
 
@@ -896,8 +938,9 @@ function updateOcclusionMask(mask, faceLandmarks) {
     }
 }
 
-function updateAvatarPose(result) {
+function updateAvatarTargetPose(result) {
     if (!currentVrm || !avatarHolder) return;
+    
     const matrix = result.facialTransformationMatrixes[0].data;
     const blendshapes = result.faceBlendshapes[0].categories;
     const mpMatrix = new THREE.Matrix4().fromArray(matrix);
@@ -911,23 +954,31 @@ function updateAvatarPose(result) {
     const yRotDir = params.flipRotY ? -1 : 1;
     const avatarRot = params.flipAvatar180 ? Math.PI : 0;
 
-    avatarHolder.position.x = (position.x * AR_SCALE_FACTOR * xDir) + params.offsetX; 
-    avatarHolder.position.y = (position.y * AR_SCALE_FACTOR) + params.offsetY;
-    avatarHolder.position.z = (position.z * AR_SCALE_FACTOR) + params.offsetZ;
+    targetPosition.x = (position.x * AR_SCALE_FACTOR * xDir) + params.offsetX; 
+    targetPosition.y = (position.y * AR_SCALE_FACTOR) + params.offsetY;
+    targetPosition.z = (position.z * AR_SCALE_FACTOR) + params.offsetZ;
     
     const euler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ');
-    avatarHolder.rotation.y = (euler.y * yRotDir) + Math.PI + avatarRot; 
-    avatarHolder.rotation.x = euler.x;
-    avatarHolder.rotation.z = euler.z;
+    const finalEuler = new THREE.Euler(
+        euler.x, 
+        (euler.y * yRotDir) + Math.PI + avatarRot, 
+        euler.z, 
+        'YXZ'
+    );
+    targetQuaternion.setFromEuler(finalEuler);
     
-    if (currentVrm.expressionManager) {
-        const map = { 'jawOpen': 'aa', 'mouthPucker': 'ou', 'mouthSmileLeft': 'happy', 'mouthSmileRight': 'happy', 'eyeBlinkLeft': 'blinkLeft', 'eyeBlinkRight': 'blinkRight', 'browInnerUp': 'surprised' };
-        currentVrm.expressionManager.expressions.forEach((expr, name) => { if (map[name] === undefined) currentVrm.expressionManager.setValue(name, 0); });
-        blendshapes.forEach(shape => { const vrmName = map[shape.categoryName]; if (vrmName) currentVrm.expressionManager.setValue(vrmName, shape.score); });
-        const smileL = blendshapes.find(b => b.categoryName === 'mouthSmileLeft')?.score || 0;
-        const smileR = blendshapes.find(b => b.categoryName === 'mouthSmileRight')?.score || 0;
-        currentVrm.expressionManager.setValue('happy', Math.max(smileL, smileR)); 
-    }
+    const map = { 'jawOpen': 'aa', 'mouthPucker': 'ou', 'mouthSmileLeft': 'happy', 'mouthSmileRight': 'happy', 'eyeBlinkLeft': 'blinkLeft', 'eyeBlinkRight': 'blinkRight', 'browInnerUp': 'surprised' };
+    
+    blendshapes.forEach(shape => { 
+        const vrmName = map[shape.categoryName]; 
+        if (vrmName) {
+            targetExpressions[vrmName] = shape.score;
+        }
+    });
+    
+    const smileL = blendshapes.find(b => b.categoryName === 'mouthSmileLeft')?.score || 0;
+    const smileR = blendshapes.find(b => b.categoryName === 'mouthSmileRight')?.score || 0;
+    targetExpressions['happy'] = Math.max(smileL, smileR);
 }
 
 function onWindowResize() {
