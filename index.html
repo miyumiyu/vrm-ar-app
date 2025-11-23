@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRM Head Only AR (Narrow Mask)</title>
+    <title>VRM Head Only AR (Mirror Eye Option)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; color: white; font-family: sans-serif; }
@@ -139,7 +139,7 @@
     <div id="ui-toggle-btn" title="UI表示/非表示">👁️</div>
 
     <div id="ui-layer">
-        <h1 class="text-xl font-bold mb-4 text-white tracking-tight">Head Avatar AR <span class="text-xs text-blue-400 font-normal">v2.2</span></h1>
+        <h1 class="text-xl font-bold mb-4 text-white tracking-tight">Head Avatar AR <span class="text-xs text-blue-400 font-normal">v2.5 (Mirror)</span></h1>
         
         <input type="file" id="vrmInput" accept=".vrm" style="display: none;">
         <button id="loadBtn" class="btn">1. VRMを選択</button>
@@ -187,9 +187,19 @@
                 <input type="checkbox" id="flipRotY" checked> <span>回転 (Y)</span>
             </label>
         </div>
+        <div class="mt-2">
+            <label class="flex items-center space-x-2 text-xs text-purple-300 font-bold">
+               <input type="checkbox" id="mirrorEyeCheck"> <span>目と視線を左右反転 (Mirror Eye)</span>
+           </label>
+        </div>
         <div class="control-group">
             <label><span>滑らかさ (Smoothing)</span> <span id="smoothVal" class="text-green-400">0.50</span></label>
             <input type="range" id="smoothRange" min="0.1" max="0.95" step="0.05" value="0.5">
+        </div>
+        <div class="control-group">
+            <label><span>視線の強さ (Eye Look)</span> <span id="eyeGazeScaleVal" class="text-purple-400">0.80</span></label>
+            <input type="range" id="eyeGazeScaleRange" min="0.0" max="2.0" step="0.1" value="0.8">
+            <div class="text-[10px] text-gray-500 text-right">0にすると視線を動かしません</div>
         </div>
 
         <div class="section-title">アバター調整</div>
@@ -223,7 +233,6 @@
             アバターが見える範囲を調整します
         </div>
 
-        <!-- 顔の広さのデフォルト値を1.5から1.3に変更 -->
         <div class="control-group">
             <label><span>顔の広さ (Face Width)</span> <span id="cutoutScaleVal" class="text-yellow-400">1.30</span></label>
             <input type="range" id="cutoutScaleRange" min="1.0" max="3.0" step="0.05" value="1.3">
@@ -291,8 +300,7 @@ let maskCtx = null;
 let maskUpdateCount = 0; 
 let hasCustomImage = false;
 
-// 修正: 顔の輪郭点から、横側の点(耳に近い部分)を削除して狭くした
-// 削除した点: 右側[454, 323, 361], 左側[132, 93, 234]
+// 修正済みの顔輪郭インデックス
 const FACE_OVAL_INDICES = [10, 338, 297, 332, 284, 251, 389, 356, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 127, 162, 21, 54, 103, 67, 109];
 
 // --- パラメータとUI要素 ---
@@ -303,7 +311,7 @@ let params = {
     offsetZ: -0.01,
     
     // マスク調整パラメータ
-    cutoutScale: 1.3,  // 顔の広さのデフォルト値を1.3に変更
+    cutoutScale: 1.3,
     cutoutBottom: 1.0, 
     cutoutTop: 2.0,    
     
@@ -316,13 +324,18 @@ let params = {
     flipAvatar180: false,
     blackoutMode: true,
     
-    smoothFactor: 0.5
+    smoothFactor: 0.5,
+    eyeGazeScale: 0.8,
+    mirrorEye: false // 目の左右反転
 };
 
 // --- スムージング用のターゲット変数 ---
 let targetPosition = new THREE.Vector3(0,0,0);
 let targetQuaternion = new THREE.Quaternion();
 let targetExpressions = {}; 
+// 眼球回転用ターゲット (左目・右目)
+let targetEyeLRot = new THREE.Quaternion();
+let targetEyeRRot = new THREE.Quaternion();
 
 const statusText = document.getElementById('statusText');
 const debugInfo = document.getElementById('debugInfo');
@@ -343,6 +356,7 @@ const flipMoveXCheck = document.getElementById('flipMoveX');
 const flipRotYCheck = document.getElementById('flipRotY');
 const flipAvatar180Check = document.getElementById('flipAvatar180'); 
 const blackoutModeCheck = document.getElementById('blackoutMode');
+const mirrorEyeCheck = document.getElementById('mirrorEyeCheck');
 
 const inputs = {
     scale: document.getElementById('scaleRange'),
@@ -353,6 +367,7 @@ const inputs = {
     cutoutBottom: document.getElementById('cutoutBottomRange'),
     cutoutTop: document.getElementById('cutoutTopRange'),
     smoothFactor: document.getElementById('smoothRange'),
+    eyeGazeScale: document.getElementById('eyeGazeScaleRange'),
 };
 const displays = {
     scale: document.getElementById('scaleVal'),
@@ -363,6 +378,7 @@ const displays = {
     cutoutBottom: document.getElementById('cutoutBottomVal'),
     cutoutTop: document.getElementById('cutoutTopVal'),
     smoothFactor: document.getElementById('smoothVal'),
+    eyeGazeScale: document.getElementById('eyeGazeScaleVal'),
 };
 
 async function init() {
@@ -418,6 +434,7 @@ async function init() {
     flipRotYCheck.addEventListener('change', (e) => { params.flipRotY = e.target.checked; });
     flipAvatar180Check.addEventListener('change', (e) => { params.flipAvatar180 = e.target.checked; });
     blackoutModeCheck.addEventListener('change', (e) => { params.blackoutMode = e.target.checked; });
+    mirrorEyeCheck.addEventListener('change', (e) => { params.mirrorEye = e.target.checked; });
     
     resetPosBtn.addEventListener('click', resetParams);
 
@@ -443,7 +460,7 @@ function resetParams() {
     params.offsetY = 0.0;
     params.offsetZ = -0.01;
     
-    params.cutoutScale = 1.3; // リセット時も1.3に戻す
+    params.cutoutScale = 1.3;
     params.cutoutBottom = 1.0;
     params.cutoutTop = 2.0;
     
@@ -454,6 +471,8 @@ function resetParams() {
     params.flipAvatar180 = false;
     params.blackoutMode = true;
     params.smoothFactor = 0.5;
+    params.eyeGazeScale = 0.8;
+    params.mirrorEye = false;
     
     Object.keys(inputs).forEach(key => {
         if(inputs[key]) inputs[key].value = params[key];
@@ -466,6 +485,7 @@ function resetParams() {
     flipRotYCheck.checked = true;
     flipAvatar180Check.checked = false;
     blackoutModeCheck.checked = true;
+    mirrorEyeCheck.checked = false;
 
     if (avatarHolder) {
         const s = params.scale;
@@ -822,6 +842,14 @@ function animate() {
         avatarHolder.position.lerp(targetPosition, t);
         avatarHolder.quaternion.slerp(targetQuaternion, t);
         
+        // --- 視線(Eye)のスムージング適用 ---
+        if (currentVrm.humanoid) {
+            const eyeL = currentVrm.humanoid.getNormalizedBoneNode('leftEye');
+            const eyeR = currentVrm.humanoid.getNormalizedBoneNode('rightEye');
+            if (eyeL) eyeL.quaternion.slerp(targetEyeLRot, t);
+            if (eyeR) eyeR.quaternion.slerp(targetEyeRRot, t);
+        }
+
         if (currentVrm.expressionManager) {
             Object.keys(targetExpressions).forEach(name => {
                 const targetVal = targetExpressions[name];
@@ -836,7 +864,6 @@ function animate() {
     renderer.render(scene, camera);
 }
 
-// 修正: 顔の輪郭に沿って穴をあける
 function updateOcclusionMask(mask, faceLandmarks) {
     if (maskCanvas.width !== videoElement.videoWidth) {
         maskCanvas.width = videoElement.videoWidth;
@@ -849,7 +876,6 @@ function updateOcclusionMask(mask, faceLandmarks) {
     const imgData = maskCtx.createImageData(width, height);
     const invert = params.invertMask;
     
-    // 体全体のマスクを描画 (ここまでは同じ)
     for (let i = 0; i < width * height; ++i) {
         const category = maskArray[i];
         const pixelIndex = i * 4;
@@ -869,17 +895,14 @@ function updateOcclusionMask(mask, faceLandmarks) {
 
     maskCtx.putImageData(imgData, 0, 0);
     
-    // 顔の部分だけ穴をあける (ここを修正)
     if (faceLandmarks) {
         maskCtx.globalCompositeOperation = 'destination-out'; 
         maskCtx.fillStyle = 'rgba(0,0,0,1)'; 
         
-        // 1. 重心を計算
         let cx = 0, cy = 0;
         const pts = [];
         for(let i=0; i<FACE_OVAL_INDICES.length; i++) {
             const p = faceLandmarks[FACE_OVAL_INDICES[i]];
-            // 座標をCanvasサイズに変換
             const x = p.x * width;
             const y = p.y * height;
             pts.push({x, y});
@@ -889,30 +912,20 @@ function updateOcclusionMask(mask, faceLandmarks) {
         cx /= pts.length;
         cy /= pts.length;
         
-        // 2. パスを作成 (中心から拡大して描画)
         maskCtx.beginPath();
         
         for(let i=0; i<pts.length; i++) {
             let px = pts[i].x;
             let py = pts[i].y;
             
-            // 重心からのベクトル
             let vx = px - cx;
             let vy = py - cy;
             
-            // 拡張係数の決定
-            // 通常のスケール
             let scale = params.cutoutScale;
             
-            // インデックスが0付近(おでこ)か18付近(アゴ)かでスケールを変える
-            // FACE_OVAL_INDICES[0]は額(10), FACE_OVAL_INDICES[18]はアゴ(152)
-            
-            // 簡易的にY座標で判定：重心より上ならTopScale、下ならBottomScaleをブレンド
             if (vy < 0) {
-                // 上（おでこ側）
-                scale *= params.cutoutTop; // 髪の毛対策で大きく広げる
+                scale *= params.cutoutTop; 
             } else {
-                // 下（アゴ側）
                 scale *= params.cutoutBottom;
             }
 
@@ -960,14 +973,28 @@ function updateAvatarTargetPose(result) {
     
     const euler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ');
     const finalEuler = new THREE.Euler(
-        euler.x, 
+        // 修正: 符号を反転させる (元の値 euler.x にマイナスをつける)
+        -euler.x, 
         (euler.y * yRotDir) + Math.PI + avatarRot, 
-        euler.z, 
+        euler.z, // Z軸も必要に応じて反転検討ですが、まずはユーザー指摘のXのみ
         'YXZ'
     );
     targetQuaternion.setFromEuler(finalEuler);
     
-    const map = { 'jawOpen': 'aa', 'mouthPucker': 'ou', 'mouthSmileLeft': 'happy', 'mouthSmileRight': 'happy', 'eyeBlinkLeft': 'blinkLeft', 'eyeBlinkRight': 'blinkRight', 'browInnerUp': 'surprised' };
+    // --- Expression Mapping ---
+    // 瞬きを一旦取り出す
+    let blinkL = blendshapes.find(b => b.categoryName === 'eyeBlinkLeft')?.score || 0;
+    let blinkR = blendshapes.find(b => b.categoryName === 'eyeBlinkRight')?.score || 0;
+
+    // ミラー反転の処理
+    if (params.mirrorEye) {
+        // 反転（データを入れ替える）
+        const temp = blinkL;
+        blinkL = blinkR;
+        blinkR = temp;
+    }
+
+    const map = { 'jawOpen': 'aa', 'mouthPucker': 'ou', 'mouthSmileLeft': 'happy', 'mouthSmileRight': 'happy', 'browInnerUp': 'surprised' };
     
     blendshapes.forEach(shape => { 
         const vrmName = map[shape.categoryName]; 
@@ -975,10 +1002,56 @@ function updateAvatarTargetPose(result) {
             targetExpressions[vrmName] = shape.score;
         }
     });
+    // 瞬きの適用
+    targetExpressions['blinkLeft'] = blinkL;
+    targetExpressions['blinkRight'] = blinkR;
     
     const smileL = blendshapes.find(b => b.categoryName === 'mouthSmileLeft')?.score || 0;
     const smileR = blendshapes.find(b => b.categoryName === 'mouthSmileRight')?.score || 0;
     targetExpressions['happy'] = Math.max(smileL, smileR);
+
+    // --- Eye Gaze Control (視線制御) ---
+    // MediaPipe Blendshapesから視線成分を取得
+    let lookUpL = blendshapes.find(b => b.categoryName === 'eyeLookUpLeft')?.score || 0;
+    let lookDownL = blendshapes.find(b => b.categoryName === 'eyeLookDownLeft')?.score || 0;
+    let lookInL = blendshapes.find(b => b.categoryName === 'eyeLookInLeft')?.score || 0;
+    let lookOutL = blendshapes.find(b => b.categoryName === 'eyeLookOutLeft')?.score || 0;
+
+    let lookUpR = blendshapes.find(b => b.categoryName === 'eyeLookUpRight')?.score || 0;
+    let lookDownR = blendshapes.find(b => b.categoryName === 'eyeLookDownRight')?.score || 0;
+    let lookInR = blendshapes.find(b => b.categoryName === 'eyeLookInRight')?.score || 0;
+    let lookOutR = blendshapes.find(b => b.categoryName === 'eyeLookOutRight')?.score || 0;
+
+    // ミラー反転の処理
+    if (params.mirrorEye) {
+        // 左目用のデータを右目のデータで上書き、右目用を左目で上書き
+        const tempUpL = lookUpL; const tempDownL = lookDownL; const tempInL = lookInL; const tempOutL = lookOutL;
+        
+        lookUpL = lookUpR; lookDownL = lookDownR; lookInL = lookInR; lookOutL = lookOutR;
+        lookUpR = tempUpL; lookDownR = tempDownL; lookInR = tempInL; lookOutR = tempOutL;
+    }
+
+    // 視線感度 (動きすぎ防止のため0.8倍などを推奨)
+    const s = params.eyeGazeScale;
+
+    // VRM(Unity)の目ボーン座標系に合わせる
+    // X軸回転: +Down / -Up
+    // Y軸回転: +Left / -Right
+    
+    // Left Eye: 
+    // 修正: ユーザー指摘により左右反転 (In/Out入れ替え)
+    // 元: (lookInL - lookOutL) -> 修正: (lookOutL - lookInL)
+    const eyeX_L = (lookDownL - lookUpL) * s;
+    const eyeY_L = (lookOutL - lookInL) * s; 
+    
+    // Right Eye:
+    // In(左側) -> +Y, Out(右側) -> -Y
+    const eyeX_R = (lookDownR - lookUpR) * s;
+    const eyeY_R = (lookInR - lookOutR) * s;
+
+    // ターゲット回転をセット
+    targetEyeLRot.setFromEuler(new THREE.Euler(eyeX_L, eyeY_L, 0));
+    targetEyeRRot.setFromEuler(new THREE.Euler(eyeX_R, eyeY_R, 0));
 }
 
 function onWindowResize() {
