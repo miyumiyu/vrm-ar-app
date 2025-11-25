@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRM Head Only AR (Mirror Eye Option)</title>
+    <title>VRM Head Only AR (Mouse Control)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; color: white; font-family: sans-serif; }
-        #container { position: relative; width: 100vw; height: 100vh; background-color: black; }
+        #container { position: relative; width: 100vw; height: 100vh; background-color: black; cursor: grab; }
+        #container:active { cursor: grabbing; }
         
         /* Layer 0: 背景映像 (WebCam) */
         #videoElement { 
@@ -49,6 +50,7 @@
             box-shadow: 0 4px 6px rgba(0,0,0,0.3);
             backdrop-filter: blur(5px);
             transition: opacity 0.3s;
+            cursor: auto; /* UI上は通常のカーソル */
         }
         
         #ui-layer.hidden-ui { opacity: 0; pointer-events: none; }
@@ -139,7 +141,10 @@
     <div id="ui-toggle-btn" title="UI表示/非表示">👁️</div>
 
     <div id="ui-layer">
-        <h1 class="text-xl font-bold mb-4 text-white tracking-tight">Head Avatar AR <span class="text-xs text-blue-400 font-normal">v2.5 (Mirror)</span></h1>
+        <h1 class="text-xl font-bold mb-4 text-white tracking-tight">Head Avatar AR <span class="text-xs text-blue-400 font-normal">v2.7 (Control)</span></h1>
+        <div class="text-[10px] text-gray-400 mb-4">
+            🖱️ 画面ドラッグで移動 / ホイールで拡大縮小
+        </div>
         
         <input type="file" id="vrmInput" accept=".vrm" style="display: none;">
         <button id="loadBtn" class="btn">1. VRMを選択</button>
@@ -192,6 +197,16 @@
                <input type="checkbox" id="mirrorEyeCheck"> <span>目と視線を左右反転 (Mirror Eye)</span>
            </label>
         </div>
+        
+        <div class="mt-3 mb-2 p-2 border border-purple-800 bg-purple-900/20 rounded">
+            <label class="flex items-center space-x-2 text-xs text-purple-300 font-bold cursor-pointer">
+               <input type="checkbox" id="perfectSyncCheck"> <span>パーフェクトシンク (beta)</span>
+            </label>
+            <div class="text-[10px] text-gray-400 mt-1 ml-5">
+                ARKit対応(52表情)モデル専用。<br>表情が動かなくなる場合はOFFに。
+            </div>
+        </div>
+
         <div class="control-group">
             <label><span>滑らかさ (Smoothing)</span> <span id="smoothVal" class="text-green-400">0.50</span></label>
             <input type="range" id="smoothRange" min="0.1" max="0.95" step="0.05" value="0.5">
@@ -199,7 +214,6 @@
         <div class="control-group">
             <label><span>視線の強さ (Eye Look)</span> <span id="eyeGazeScaleVal" class="text-purple-400">0.80</span></label>
             <input type="range" id="eyeGazeScaleRange" min="0.0" max="2.0" step="0.1" value="0.8">
-            <div class="text-[10px] text-gray-500 text-right">0にすると視線を動かしません</div>
         </div>
 
         <div class="section-title">アバター調整</div>
@@ -300,6 +314,10 @@ let maskCtx = null;
 let maskUpdateCount = 0; 
 let hasCustomImage = false;
 
+// マウス操作用
+let isDragging = false;
+let previousMousePosition = { x: 0, y: 0 };
+
 // 修正済みの顔輪郭インデックス
 const FACE_OVAL_INDICES = [10, 338, 297, 332, 284, 251, 389, 356, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 127, 162, 21, 54, 103, 67, 109];
 
@@ -310,7 +328,6 @@ let params = {
     offsetY: 0.0, 
     offsetZ: -0.01,
     
-    // マスク調整パラメータ
     cutoutScale: 1.3,
     cutoutBottom: 1.0, 
     cutoutTop: 2.0,    
@@ -326,14 +343,14 @@ let params = {
     
     smoothFactor: 0.5,
     eyeGazeScale: 0.8,
-    mirrorEye: false // 目の左右反転
+    mirrorEye: false,
+    usePerfectSync: false
 };
 
 // --- スムージング用のターゲット変数 ---
 let targetPosition = new THREE.Vector3(0,0,0);
 let targetQuaternion = new THREE.Quaternion();
 let targetExpressions = {}; 
-// 眼球回転用ターゲット (左目・右目)
 let targetEyeLRot = new THREE.Quaternion();
 let targetEyeRRot = new THREE.Quaternion();
 
@@ -357,6 +374,7 @@ const flipRotYCheck = document.getElementById('flipRotY');
 const flipAvatar180Check = document.getElementById('flipAvatar180'); 
 const blackoutModeCheck = document.getElementById('blackoutMode');
 const mirrorEyeCheck = document.getElementById('mirrorEyeCheck');
+const perfectSyncCheck = document.getElementById('perfectSyncCheck');
 
 const inputs = {
     scale: document.getElementById('scaleRange'),
@@ -435,6 +453,7 @@ async function init() {
     flipAvatar180Check.addEventListener('change', (e) => { params.flipAvatar180 = e.target.checked; });
     blackoutModeCheck.addEventListener('change', (e) => { params.blackoutMode = e.target.checked; });
     mirrorEyeCheck.addEventListener('change', (e) => { params.mirrorEye = e.target.checked; });
+    perfectSyncCheck.addEventListener('change', (e) => { params.usePerfectSync = e.target.checked; });
     
     resetPosBtn.addEventListener('click', resetParams);
 
@@ -451,7 +470,89 @@ async function init() {
         });
     });
 
+    // --- Mouse & Touch Interaction ---
+    window.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('touchstart', onTouchStart, { passive: false });
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('touchend', onMouseUp);
+
     await initMediaPipe();
+}
+
+// --- Mouse Control Functions ---
+function onMouseDown(e) {
+    if (e.target.closest('#ui-layer') || e.target.closest('#ui-toggle-btn')) return;
+    isDragging = true;
+    previousMousePosition = { x: e.clientX, y: e.clientY };
+}
+
+function onTouchStart(e) {
+    if (e.target.closest('#ui-layer') || e.target.closest('#ui-toggle-btn')) return;
+    if (e.touches.length === 1) {
+        isDragging = true;
+        previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+}
+
+function onMouseMove(e) {
+    if (!isDragging) return;
+    const deltaX = e.clientX - previousMousePosition.x;
+    const deltaY = e.clientY - previousMousePosition.y;
+    previousMousePosition = { x: e.clientX, y: e.clientY };
+    updatePositionFromDelta(deltaX, deltaY);
+}
+
+function onTouchMove(e) {
+    if (!isDragging) return;
+    if (e.cancelable) e.preventDefault();
+    
+    if (e.touches.length === 1) {
+        const deltaX = e.touches[0].clientX - previousMousePosition.x;
+        const deltaY = e.touches[0].clientY - previousMousePosition.y;
+        previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        updatePositionFromDelta(deltaX, deltaY);
+    }
+}
+
+function onMouseUp() {
+    isDragging = false;
+}
+
+function onWheel(e) {
+    if (e.target.closest('#ui-layer')) return;
+    e.preventDefault();
+
+    // ホイール感度
+    const delta = -Math.sign(e.deltaY) * 0.1; 
+    let newScale = params.scale + delta;
+    newScale = Math.max(0.5, Math.min(10.0, newScale)); 
+    
+    params.scale = newScale;
+    
+    if (inputs.scale) inputs.scale.value = newScale;
+    if (displays.scale) displays.scale.innerText = newScale.toFixed(2);
+    
+    if (avatarHolder) avatarHolder.scale.set(newScale, newScale, newScale);
+}
+
+function updatePositionFromDelta(dx, dy) {
+    // マウス移動量をワールド移動量に変換
+    const sensitivity = 0.003; 
+    
+    params.offsetX += dx * sensitivity;
+    params.offsetY -= dy * sensitivity; // 画面座標Yは下がプラスなので引く
+    
+    params.offsetX = Math.max(-2.0, Math.min(2.0, params.offsetX));
+    params.offsetY = Math.max(-2.0, Math.min(2.0, params.offsetY));
+
+    if (inputs.offsetX) inputs.offsetX.value = params.offsetX;
+    if (displays.offsetX) displays.offsetX.innerText = params.offsetX.toFixed(3);
+    
+    if (inputs.offsetY) inputs.offsetY.value = params.offsetY;
+    if (displays.offsetY) displays.offsetY.innerText = params.offsetY.toFixed(3);
 }
 
 function resetParams() {
@@ -473,6 +574,7 @@ function resetParams() {
     params.smoothFactor = 0.5;
     params.eyeGazeScale = 0.8;
     params.mirrorEye = false;
+    params.usePerfectSync = false;
     
     Object.keys(inputs).forEach(key => {
         if(inputs[key]) inputs[key].value = params[key];
@@ -486,6 +588,7 @@ function resetParams() {
     flipAvatar180Check.checked = false;
     blackoutModeCheck.checked = true;
     mirrorEyeCheck.checked = false;
+    perfectSyncCheck.checked = false;
 
     if (avatarHolder) {
         const s = params.scale;
@@ -842,7 +945,6 @@ function animate() {
         avatarHolder.position.lerp(targetPosition, t);
         avatarHolder.quaternion.slerp(targetQuaternion, t);
         
-        // --- 視線(Eye)のスムージング適用 ---
         if (currentVrm.humanoid) {
             const eyeL = currentVrm.humanoid.getNormalizedBoneNode('leftEye');
             const eyeR = currentVrm.humanoid.getNormalizedBoneNode('rightEye');
@@ -973,45 +1075,50 @@ function updateAvatarTargetPose(result) {
     
     const euler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ');
     const finalEuler = new THREE.Euler(
-        // 修正: 符号を反転させる (元の値 euler.x にマイナスをつける)
         -euler.x, 
         (euler.y * yRotDir) + Math.PI + avatarRot, 
-        euler.z, // Z軸も必要に応じて反転検討ですが、まずはユーザー指摘のXのみ
+        euler.z, 
         'YXZ'
     );
     targetQuaternion.setFromEuler(finalEuler);
     
     // --- Expression Mapping ---
-    // 瞬きを一旦取り出す
-    let blinkL = blendshapes.find(b => b.categoryName === 'eyeBlinkLeft')?.score || 0;
-    let blinkR = blendshapes.find(b => b.categoryName === 'eyeBlinkRight')?.score || 0;
+    if (params.usePerfectSync) {
+        blendshapes.forEach(shape => {
+            let name = shape.categoryName;
+            if (params.mirrorEye) {
+                if (name.includes('Left')) name = name.replace('Left', 'Right');
+                else if (name.includes('Right')) name = name.replace('Right', 'Left');
+            }
+            const pascalName = name.charAt(0).toUpperCase() + name.slice(1);
+            targetExpressions[pascalName] = shape.score;
+        });
+    } 
+    else {
+        let blinkL = blendshapes.find(b => b.categoryName === 'eyeBlinkLeft')?.score || 0;
+        let blinkR = blendshapes.find(b => b.categoryName === 'eyeBlinkRight')?.score || 0;
 
-    // ミラー反転の処理
-    if (params.mirrorEye) {
-        // 反転（データを入れ替える）
-        const temp = blinkL;
-        blinkL = blinkR;
-        blinkR = temp;
+        if (params.mirrorEye) {
+            const temp = blinkL; blinkL = blinkR; blinkR = temp;
+        }
+
+        const map = { 'jawOpen': 'aa', 'mouthPucker': 'ou', 'mouthSmileLeft': 'happy', 'mouthSmileRight': 'happy', 'browInnerUp': 'surprised' };
+        
+        blendshapes.forEach(shape => { 
+            const vrmName = map[shape.categoryName]; 
+            if (vrmName) {
+                targetExpressions[vrmName] = shape.score;
+            }
+        });
+        targetExpressions['blinkLeft'] = blinkL;
+        targetExpressions['blinkRight'] = blinkR;
+        
+        const smileL = blendshapes.find(b => b.categoryName === 'mouthSmileLeft')?.score || 0;
+        const smileR = blendshapes.find(b => b.categoryName === 'mouthSmileRight')?.score || 0;
+        targetExpressions['happy'] = Math.max(smileL, smileR);
     }
 
-    const map = { 'jawOpen': 'aa', 'mouthPucker': 'ou', 'mouthSmileLeft': 'happy', 'mouthSmileRight': 'happy', 'browInnerUp': 'surprised' };
-    
-    blendshapes.forEach(shape => { 
-        const vrmName = map[shape.categoryName]; 
-        if (vrmName) {
-            targetExpressions[vrmName] = shape.score;
-        }
-    });
-    // 瞬きの適用
-    targetExpressions['blinkLeft'] = blinkL;
-    targetExpressions['blinkRight'] = blinkR;
-    
-    const smileL = blendshapes.find(b => b.categoryName === 'mouthSmileLeft')?.score || 0;
-    const smileR = blendshapes.find(b => b.categoryName === 'mouthSmileRight')?.score || 0;
-    targetExpressions['happy'] = Math.max(smileL, smileR);
-
     // --- Eye Gaze Control (視線制御) ---
-    // MediaPipe Blendshapesから視線成分を取得
     let lookUpL = blendshapes.find(b => b.categoryName === 'eyeLookUpLeft')?.score || 0;
     let lookDownL = blendshapes.find(b => b.categoryName === 'eyeLookDownLeft')?.score || 0;
     let lookInL = blendshapes.find(b => b.categoryName === 'eyeLookInLeft')?.score || 0;
@@ -1022,34 +1129,20 @@ function updateAvatarTargetPose(result) {
     let lookInR = blendshapes.find(b => b.categoryName === 'eyeLookInRight')?.score || 0;
     let lookOutR = blendshapes.find(b => b.categoryName === 'eyeLookOutRight')?.score || 0;
 
-    // ミラー反転の処理
     if (params.mirrorEye) {
-        // 左目用のデータを右目のデータで上書き、右目用を左目で上書き
         const tempUpL = lookUpL; const tempDownL = lookDownL; const tempInL = lookInL; const tempOutL = lookOutL;
-        
         lookUpL = lookUpR; lookDownL = lookDownR; lookInL = lookInR; lookOutL = lookOutR;
         lookUpR = tempUpL; lookDownR = tempDownL; lookInR = tempInL; lookOutR = tempOutL;
     }
 
-    // 視線感度 (動きすぎ防止のため0.8倍などを推奨)
     const s = params.eyeGazeScale;
 
-    // VRM(Unity)の目ボーン座標系に合わせる
-    // X軸回転: +Down / -Up
-    // Y軸回転: +Left / -Right
-    
-    // Left Eye: 
-    // 修正: ユーザー指摘により左右反転 (In/Out入れ替え)
-    // 元: (lookInL - lookOutL) -> 修正: (lookOutL - lookInL)
     const eyeX_L = (lookDownL - lookUpL) * s;
     const eyeY_L = (lookOutL - lookInL) * s; 
     
-    // Right Eye:
-    // In(左側) -> +Y, Out(右側) -> -Y
     const eyeX_R = (lookDownR - lookUpR) * s;
     const eyeY_R = (lookInR - lookOutR) * s;
 
-    // ターゲット回転をセット
     targetEyeLRot.setFromEuler(new THREE.Euler(eyeX_L, eyeY_L, 0));
     targetEyeRRot.setFromEuler(new THREE.Euler(eyeX_R, eyeY_R, 0));
 }
